@@ -1,0 +1,17 @@
+name: krfenv
+channels:
+  - defaults
+dependencies:
+  - pytorch
+  - pytorch-cuda=11.8
+  - torchaudio
+  - torchvision
+  - transformers
+  - python-dotenv
+  - conda-forge::accelerate
+  - conda-forge::bitsandbytes
+  - conda-forge::peft
+  - datasets
+  - chess
+  - outlines
+prefix: /home/vedaangh/anaconda3/envs/krfenv
