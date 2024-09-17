@@ -15,6 +15,7 @@ class ChessDataset(Dataset):
         data = []
         with chess.engine.SimpleEngine.popen_uci(self.engine_path) as engine:
             for _ in range(num_games):
+                print("Generating game")
                 board = chess.Board()
                 game_history = []
                 for move_number in range(max_moves):
@@ -150,7 +151,7 @@ class ChessDataset(Dataset):
         # Flip the board representation
         return np.flip(array, axis=(1, 2))
 
-def get_chess_dataloader(num_games=1000, max_moves=100, trajectory_length=10, batch_size=32, engine_path="path/to/stockfish"):
+def get_chess_dataloader(num_games=1000, max_moves=100, trajectory_length=10, batch_size=32, engine_path="/home/linuxbrew/.linuxbrew/bin/stockfish"):
     full_dataset = ChessDataset(num_games, max_moves, trajectory_length, engine_path)
     train_size = int(0.7 * len(full_dataset))
     val_size = int(0.15 * len(full_dataset))
@@ -159,7 +160,10 @@ def get_chess_dataloader(num_games=1000, max_moves=100, trajectory_length=10, ba
     
     return DataLoader(train_dataset, batch_size=batch_size, shuffle=True), DataLoader(val_dataset, batch_size=batch_size, shuffle=True), DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 # Example usage:
-train_dataloader, val_dataloader, test_dataloader = get_chess_dataloader(trajectory_length=10, engine_path="/path/to/stockfish")
+train_dataloader, val_dataloader, test_dataloader = get_chess_dataloader(
+    trajectory_length=10, 
+    engine_path="/home/linuxbrew/.linuxbrew/bin/stockfish"
+)
 print(len(train_dataloader.dataset))
 print(len(val_dataloader.dataset))
 print(len(test_dataloader.dataset))
