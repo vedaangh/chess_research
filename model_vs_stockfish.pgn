@@ -1,0 +1,220 @@
+[Event "Model vs Stockfish Game skill_1_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 1)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. c4 f5 2. d4 b5 3. Nf3 h6 4. cxb5 g5 5. Ne5 c6 6. Nc3 cxb5 7. h4 Bg7 8. e4 Bf6 9. Qh5+ Kf8 10. Qf7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_2_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 2)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. d4 f5 2. Nh3 b5 3. Nc3 h6 4. e4 g5 5. Qh5# 1-0
+
+
+[Event "Model vs Stockfish Game skill_3_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 3)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_4_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 4)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. d3 b5 3. exf5 h6 4. Qh5+ g6 5. Qxg6# 1-0
+
+
+[Event "Model vs Stockfish Game skill_5_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 5)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. Nf3 f5 2. d4 b5 3. e3 h6 4. Bxb5 g5 5. Ne5 c6 6. Qh5# 1-0
+
+
+[Event "Model vs Stockfish Game skill_6_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 6)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_7_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 7)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. e5 b5 3. Nf3 h6 4. Bxb5 g5 5. Nd4 c6 6. Qh5# 1-0
+
+
+[Event "Model vs Stockfish Game skill_8_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 8)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_9_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 9)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. Nc3 b5 3. exf5 h6 4. Qh5+ g6 5. Qxg6# 1-0
+
+
+[Event "Model vs Stockfish Game skill_10_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 10)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_11_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 11)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_12_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 12)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_13_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 13)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_14_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 14)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_15_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 15)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_16_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 16)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_17_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 17)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_18_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 18)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_19_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 19)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
+[Event "Model vs Stockfish Game skill_20_game_1"]
+[Site "?"]
+[Date "2024.11.04"]
+[Round "?"]
+[White "Stockfish (Level 20)"]
+[Black "Model"]
+[Result "1-0"]
+
+1. e4 f5 2. exf5 b5 3. Qh5+ g6 4. fxg6 h6 5. g7# 1-0
+
+
