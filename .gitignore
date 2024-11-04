@@ -28,3 +28,4 @@ build/
 
 # Environment variables
 .env
+best_model.pth
