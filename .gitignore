@@ -31,3 +31,17 @@ build/
 
 best_model.pth
 dataset.pkl
+
+# Model weights and data caches
+*.pth
+*.pkl
+
+# Chess game files
+*.pgn
+
+# Training logs and plots
+*.csv
+# only ignore real build artifacts and deps in the frontend
+frontend/node_modules/
+frontend/dist/
+frontend/build/

@@ -98,10 +98,15 @@ def play_game(
                         timestep=len(game_moves),
                         context_window=10,
                     )
+                    if move is None:  # No legal moves found
+                        break
+                    board.push(move)  # Add this line to actually make the move!
+                    print(f"Model move: {move}")
                 else:
                     # Stockfish's turn
                     result = engine.play(board, chess.engine.Limit(time=time_limit))
                     move = result.move
+                    board.push(move)
                 # Get the score of the board
 
             else:
@@ -109,6 +114,7 @@ def play_game(
                     # Stockfish's turn
                     result = engine.play(board, chess.engine.Limit(time=time_limit))
                     move = result.move
+                    board.push(move)
                 else:
                     # Model's turn
                     move = model.predict_move(
@@ -117,6 +123,10 @@ def play_game(
                         timestep=len(game_moves),
                         context_window=10,
                     )
+                    if move is None:  # No legal moves found
+                        break
+                    board.push(move)  # Add this line to actually make the move!
+                    print(f"Model move: {move}")
             score = (
                 engine.analyse(board, chess.engine.Limit(time=0.1))["score"]
                 .white()

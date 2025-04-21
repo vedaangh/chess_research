@@ -1,0 +1,5 @@
+fastapi==0.95.1
+uvicorn==0.22.0
+python-chess==1.9.4
+numpy==1.24.3
+torch==2.0.1 
