@@ -6,71 +6,178 @@ from chess import engine
 import chess.engine
 import chess.pgn
 from datetime import date
-import multiprocessing as mp
-from functools import partial
-from chess.engine import Limit
 import os
 import pickle
 import torch.nn.functional as F
+from tqdm import tqdm
 
 
 class ChessDataset(Dataset):
     def __init__(
-        self, num_games, max_moves, trajectory_length, engine_path, generate_games=True
+        self,
+        num_games,
+        max_moves,
+        trajectory_length,
+        engine_path,
+        save_path=None,
+        load_path=None,
+        generate_new=False,
+        skill_level=20,
+        time_limit=0.1,
     ):
         self.num_games = num_games
         self.max_moves = max_moves
         self.trajectory_length = trajectory_length
         self.engine_path = engine_path
+        self.save_path = save_path
+        self.skill_level = skill_level
+        self.time_limit = time_limit
         self.data = []
 
-        # Only generate games if explicitly requested
-        if generate_games:
-            self.data = self.generate_chess_data(num_games)
+        board = chess.Board()
+        self.state_shape = self.encode_board(board).shape
+        dummy_move = next(iter(board.legal_moves), None)
+        if dummy_move:
+            self.action_shape = self.encode_move(dummy_move, board).shape
+        else:
+            self.action_shape = (73, 8, 8)
 
-    def generate_game(self, _):
+        processed_data_path = (
+            load_path.replace(".pkl", "_processed.pkl") if load_path else None
+        )
+        raw_data_path = load_path
+
+        if (
+            processed_data_path
+            and os.path.exists(processed_data_path)
+            and not generate_new
+        ):
+            print(f"Loading processed dataset from {processed_data_path}")
+            with open(processed_data_path, "rb") as f:
+                self.data = pickle.load(f)
+        else:
+            raw_games = None
+            if raw_data_path and os.path.exists(raw_data_path) and not generate_new:
+                print(f"Loading raw game data from {raw_data_path}")
+                with open(raw_data_path, "rb") as f:
+                    raw_games = pickle.load(f)
+            else:
+                print(f"Generating {num_games} new games...")
+                raw_games = self.generate_raw_chess_data(num_games)
+                if self.save_path:
+                    raw_save_path = self.save_path
+                    print(f"Saving raw game data to {raw_save_path}")
+                    with open(raw_save_path, "wb") as f:
+                        pickle.dump(raw_games, f)
+
+            print("Processing raw games into trajectories...")
+            self.data = self._process_raw_games(raw_games)
+
+            if self.save_path:
+                processed_save_path = self.save_path.replace(".pkl", "_processed.pkl")
+                print(f"Saving processed dataset to {processed_save_path}")
+                with open(processed_save_path, "wb") as f:
+                    pickle.dump(self.data, f)
+
+        if not self.data:
+            print("Warning: No data loaded or generated.")
+
+    def generate_game(self):
+        game_history = []
         try:
-            # Create a new engine instance for each game
-            engine = chess.engine.SimpleEngine.popen_uci(self.engine_path)
-            engine.configure({"Skill Level": 20})
-            board = chess.Board()
-            game_history = []
+            with chess.engine.SimpleEngine.popen_uci(self.engine_path) as engine:
+                engine.configure({"Skill Level": self.skill_level})
+                board = chess.Board()
 
-            for move_number in range(self.max_moves):
-                if board.is_game_over():
-                    break
+                for move_number in range(self.max_moves):
+                    if board.is_game_over():
+                        break
 
-                result = engine.play(board, chess.engine.Limit(time=0.1))
-                move = result.move
+                    result = engine.play(
+                        board, chess.engine.Limit(time=self.time_limit)
+                    )
+                    move = result.move
 
-                state = self.encode_board(board)
-                action = self.encode_move(move, board)
-                game_history.append((state, action))
+                    state = self.encode_board(board)
+                    action = self.encode_move(move, board)
+                    board_fen = board.fen()
 
-                board.push(move)
+                    game_history.append((state, action, board_fen))
 
-            engine.quit()
+                    board.push(move)
+
             return game_history
 
         except Exception as e:
             print(f"Error generating game: {e}")
+            try:
+                if "engine" in locals() and engine.is_alive():
+                    engine.quit()
+            except Exception as eq:
+                print(f"Error quitting engine after exception: {eq}")
             return None
 
-    def generate_chess_data(self, num_games):
-        data = []
-        for i in range(num_games):
-            game_data = self.generate_game(i)
+    def generate_raw_chess_data(self, num_games):
+        raw_games_data = []
+        for i in tqdm(range(num_games), desc="Generating Games"):
+            game_data = self.generate_game()
             if game_data:
-                data.extend(game_data)
-        return data
+                raw_games_data.append(game_data)
+        return raw_games_data
+
+    def _process_raw_games(self, raw_games):
+        processed_trajectories = []
+        for game_history in tqdm(raw_games, desc="Processing Games"):
+            if not game_history:
+                continue
+
+            states, actions, fens = zip(*game_history)
+            states = list(states)
+            actions = list(actions)
+
+            final_fen = chess.Board(fens[-1]).fen()
+            final_board_after_move = chess.Board(final_fen)
+            final_board_after_move.push(chess.Move.from_uci(actions[-1]["uci"]))
+            game_result = self.get_game_result(final_board_after_move)
+
+            game_len = len(states)
+            returns_to_go = np.zeros(game_len)
+            current_rtg = game_result * (
+                1 if final_board_after_move.turn == chess.BLACK else -1
+            )
+            for t in reversed(range(game_len)):
+                returns_to_go[t] = current_rtg
+                current_rtg = returns_to_go[t]
+
+            returns_to_go.fill(game_result)
+
+            for t in range(game_len - self.trajectory_length + 1):
+                traj_states = states[t : t + self.trajectory_length]
+                traj_actions = actions[t : t + self.trajectory_length]
+                traj_rtgs = returns_to_go[t : t + self.trajectory_length]
+                traj_timesteps = np.arange(t, t + self.trajectory_length)
+
+                processed_trajectories.append(
+                    {
+                        "returns_to_go": np.array(traj_rtgs, dtype=np.float32).reshape(
+                            -1, 1
+                        ),
+                        "states": np.array(traj_states, dtype=np.float32),
+                        "actions": np.array(traj_actions, dtype=np.float32),
+                        "timesteps": np.array(traj_timesteps, dtype=np.int64).reshape(
+                            -1, 1
+                        ),
+                    }
+                )
+        return processed_trajectories
 
     def generate_example_game(self, max_moves=100, pgn_file="example_game.pgn"):
         board = chess.Board()
         game = chess.pgn.Game()
         node = game
 
-        white_skill = np.random.randint(1, 21)  # Random skill between 1 and 20
-        black_skill = np.random.randint(1, 21)  # Random skill between 1 and 20
+        white_skill = np.random.randint(1, 21)
+        black_skill = np.random.randint(1, 21)
 
         with chess.engine.SimpleEngine.popen_uci(self.engine_path) as engine:
             for move_number in range(max_moves):
@@ -80,7 +187,7 @@ class ChessDataset(Dataset):
                     white_skill if board.turn == chess.WHITE else black_skill
                 )
                 engine.configure({"Skill Level": current_skill})
-                result = engine.play(board, Limit(time=0.1))
+                result = engine.play(board, chess.engine.Limit(time=self.time_limit))
                 move = result.move
                 node = node.add_variation(move)
                 board.push(move)
@@ -104,252 +211,235 @@ class ChessDataset(Dataset):
     def __getitem__(self, idx):
         item = self.data[idx]
         return {
-            "returns_to_go": torch.tensor(
-                item["returns_to_go"], dtype=torch.float32
-            ).unsqueeze(-1),
-            "states": torch.tensor(np.stack(item["states"]), dtype=torch.float32),
-            "actions": torch.tensor(np.stack(item["actions"]), dtype=torch.float32),
-            "timesteps": torch.tensor(item["timesteps"], dtype=torch.long).unsqueeze(
-                -1
-            ),
+            "returns_to_go": torch.tensor(item["returns_to_go"], dtype=torch.float32),
+            "states": torch.tensor(item["states"], dtype=torch.float32),
+            "actions": torch.tensor(item["actions"], dtype=torch.float32),
+            "timesteps": torch.tensor(item["timesteps"], dtype=torch.long),
         }
 
     def encode_board(self, board):
-        # 12 planes for each piece type and color, 1 plane for en passant, 1 plane for color to move
         state = np.zeros((14, 8, 8), dtype=np.float32)
-
-        # Encode piece positions
-        for i in range(64):
-            piece = board.piece_at(i)
+        for sq in chess.SQUARES:
+            piece = board.piece_at(sq)
             if piece:
-                color = int(piece.color)
-                piece_type = piece.piece_type - 1
-                state[color * 6 + piece_type, i // 8, i % 8] = 1
-
-        # Encode en passant square
+                plane = (piece.piece_type - 1) * 2 + (
+                    0 if piece.color == chess.WHITE else 1
+                )
+                state[plane, sq // 8, sq % 8] = 1
         if board.ep_square:
             state[12, board.ep_square // 8, board.ep_square % 8] = 1
+        if board.turn == chess.WHITE:
+            state[13, :, :] = 1
 
-        # Encode color to move
-        state[13, :, :] = int(board.turn)
+        legal_moves_planes = np.zeros((73, 8, 8), dtype=np.float32)
+        if not board.is_game_over():
+            try:
+                for move in board.legal_moves:
+                    legal_moves_planes += self._move_to_plane(move)
+            except Exception as e:
+                print(f"Error encoding legal moves for FEN {board.fen()}: {e}")
 
-        legal = np.zeros((73, 8, 8), dtype=np.float32)
-        for move in board.legal_moves:
-            legal += self.encode_move(move, board)
-        state = np.concatenate([state, legal], axis=0)
+        state = np.concatenate([state, legal_moves_planes], axis=0)
         return state
 
-    def encode_move(self, move, board):
-        # Create 73 planes to represent different move types
-        action_planes = np.zeros((73, 8, 8), dtype=np.float32)
-
+    def _move_to_plane(self, move):
+        action_planes = np.zeros(self.action_shape, dtype=np.float32)
         from_square = move.from_square
         to_square = move.to_square
         from_rank, from_file = divmod(from_square, 8)
         to_rank, to_file = divmod(to_square, 8)
 
-        # Determine the move type and set the corresponding plane
+        plane_index = -1
         if move.promotion is None:
-            # Queen moves (including regular moves)
             delta_rank = to_rank - from_rank
             delta_file = to_file - from_file
-
-            if delta_rank == 0:  # Horizontal move
-                plane = 0
-            elif delta_file == 0:  # Vertical move
-                plane = 1
-            elif abs(delta_rank) == abs(delta_file):  # Diagonal move
-                plane = 2 if delta_rank * delta_file > 0 else 3
-            else:  # Knight move
-                plane = 4
-
             distance = max(abs(delta_rank), abs(delta_file)) - 1
-            action_planes[plane * 7 + distance, from_rank, from_file] = 1
+
+            if delta_rank == 0 and delta_file != 0:
+                direction_offset = 0 if delta_file > 0 else 1
+                plane_type = 0
+            elif delta_file == 0 and delta_rank != 0:
+                plane_type = 1
+            elif abs(delta_rank) == abs(delta_file):
+                plane_type = 2
+            else:
+                plane_type = 4
+
+            if 0 <= distance < 7:
+                plane_index = plane_type * 7 + distance
+            else:
+                print(f"Warning: Unexpected distance {distance} for move {move.uci()}")
+
         else:
-            # Promotions
-            if move.promotion == chess.QUEEN:
-                base_plane = 35
-            elif move.promotion == chess.ROOK:
-                base_plane = 44
-            elif move.promotion == chess.BISHOP:
-                base_plane = 53
-            else:  # KNIGHT
-                base_plane = 62
+            promo_type = [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT].index(
+                move.promotion
+            )
 
-            if to_file == from_file:  # Straight promotion
-                plane = base_plane
-            elif to_file > from_file:  # Capture right
-                plane = base_plane + 1
-            else:  # Capture left
-                plane = base_plane + 2
+            if to_file == from_file:
+                capture_type = 0
+            elif (board.turn == chess.WHITE and to_file > from_file) or (
+                board.turn == chess.BLACK and to_file < from_file
+            ):
+                capture_type = 1
+            else:
+                capture_type = 2
 
-            action_planes[plane, from_rank, from_file] = 1
+            base_plane = [35, 44, 53, 62][promo_type]
+            plane_index = base_plane + capture_type
+
+        if plane_index != -1 and 0 <= plane_index < self.action_shape[0]:
+            action_planes[plane_index, from_rank, from_file] = 1
+        else:
+            print(
+                f"Warning: Calculated plane index {plane_index} out of bounds for move {move.uci()}"
+            )
 
         return action_planes
 
+    def encode_move(self, move, board):
+        return self._move_to_plane(move)
+
     def get_game_result(self, board):
-        if board.is_checkmate():
-            return 1 if board.turn == chess.BLACK else -1
-        elif (
-            board.is_stalemate()
-            or board.is_insufficient_material()
-            or board.is_seventyfive_moves()
-            or board.is_fivefold_repetition()
-        ):
+        result = board.result(claim_draw=True)
+        if result == "1-0":
+            return 1
+        elif result == "0-1":
+            return -1
+        elif result == "1/2-1/2":
             return 0
         else:
-            return 0  # In case of any other termination
+            if board.is_checkmate():
+                return 1 if board.turn == chess.BLACK else -1
+            elif (
+                board.is_stalemate()
+                or board.is_insufficient_material()
+                or board.is_seventyfive_moves()
+                or board.is_fivefold_repetition()
+            ):
+                return 0
+            else:
+                return 0
 
-    def flip_perspective(self, array):
-        # Flip the board representation
-        return np.flip(array, axis=(1, 2))
+    def decode_action(self, action_planes, board):
+        if not isinstance(action_planes, np.ndarray):
+            action_planes = action_planes.cpu().numpy()
 
-    def decode_action(self, action_tensor, board):
-        # Convert to numpy and get probabilities
-        action_probs = F.softmax(action_tensor.view(-1), dim=0).cpu().numpy()
-        action_planes = action_tensor.cpu().numpy()
-
-        # Get all legal moves
         legal_moves = list(board.legal_moves)
         if not legal_moves:
             return None
 
-        # Score each legal move based on the action probabilities
-        move_scores = []
+        move_scores = {}
+        max_score = -np.inf
+        best_move = None
+
         for move in legal_moves:
-            from_square = move.from_square
-            to_square = move.to_square
-            from_rank, from_file = divmod(from_square, 8)
-            to_rank, to_file = divmod(to_square, 8)
+            try:
+                move_plane = self._move_to_plane(move)
+                plane_idx, from_rank, from_file = np.unravel_index(
+                    np.argmax(move_plane), move_plane.shape
+                )
 
-            if move.promotion is None:
-                delta_rank = to_rank - from_rank
-                delta_file = to_file - from_file
-                distance = max(abs(delta_rank), abs(delta_file)) - 1
+                score = action_planes[plane_idx, from_rank, from_file]
+                move_scores[move.uci()] = score
 
-                if delta_rank == 0:  # Horizontal
-                    plane = 0
-                elif delta_file == 0:  # Vertical
-                    plane = 1
-                elif abs(delta_rank) == abs(delta_file):  # Diagonal
-                    plane = 2 if delta_rank * delta_file > 0 else 3
-                else:  # Knight
-                    plane = 4
+                if score > max_score:
+                    max_score = score
+                    best_move = move
+            except Exception as e:
+                print(
+                    f"Error decoding/scoring move {move.uci()} on board {board.fen()}: {e}"
+                )
+                continue
 
-                score = action_probs[
-                    plane * 7 + distance * 8 * 8 + from_rank * 8 + from_file
-                ]
-            else:
-                # Handle promotions
-                if move.promotion == chess.QUEEN:
-                    base_plane = 35
-                elif move.promotion == chess.ROOK:
-                    base_plane = 44
-                elif move.promotion == chess.BISHOP:
-                    base_plane = 53
-                else:  # KNIGHT
-                    base_plane = 62
+        if best_move is None and legal_moves:
+            best_move = legal_moves[0]
+        elif not legal_moves:
+            return None
 
-                if to_file == from_file:  # Straight
-                    plane = base_plane
-                elif to_file > from_file:  # Capture right
-                    plane = base_plane + 1
-                else:  # Capture left
-                    plane = base_plane + 2
-
-                score = action_probs[plane * 8 * 8 + from_rank * 8 + from_file]
-
-            move_scores.append((score, move))
-
-        # Return the legal move with highest probability
-        best_move = max(move_scores, key=lambda x: x[0])[1]
         return best_move
 
 
 def get_chess_dataloader(
-    num_games=10,
-    max_moves=100,
-    trajectory_length=10,
-    batch_size=32,
-    engine_path="/home/linuxbrew/.linuxbrew/bin/stockfish",
-    save_path=None,
-    load_path=None,
+    num_games=1000,
+    max_moves=150,
+    trajectory_length=20,
+    batch_size=64,
+    engine_path=None,
+    save_path="chess_dataset_raw.pkl",
+    load_path="chess_dataset_raw.pkl",
+    generate_new=False,
+    skill_level=20,
+    time_limit=0.1,
+    num_workers=4,
 ):
-    if load_path and os.path.exists(load_path):
-        print(f"Loading dataset from {load_path}")
-        with open(load_path, "rb") as f:
-            dataset = pickle.load(f)
-    else:
-        print("Generating new dataset")
-        dataset = ChessDataset(num_games, max_moves, trajectory_length, engine_path)
-        if save_path:
-            print(f"Saving dataset to {save_path}")
-            with open(save_path, "wb") as f:
-                pickle.dump(dataset, f)
+    if engine_path is None:
+        raise ValueError("engine_path must be provided.")
 
-    train_size = int(0.7 * len(dataset))
-    val_size = int(0.15 * len(dataset))
-    test_size = len(dataset) - train_size - val_size
+    dataset = ChessDataset(
+        num_games=num_games,
+        max_moves=max_moves,
+        trajectory_length=trajectory_length,
+        engine_path=engine_path,
+        save_path=save_path,
+        load_path=load_path,
+        generate_new=generate_new,
+        skill_level=skill_level,
+        time_limit=time_limit,
+    )
+
+    if len(dataset) == 0:
+        raise RuntimeError(
+            "Dataset is empty after initialization. Check paths and generation."
+        )
+
+    total_size = len(dataset)
+    if total_size < 3:
+        raise ValueError(
+            f"Dataset size ({total_size}) is too small for train/val/test split."
+        )
+
+    train_size = int(0.7 * total_size)
+    val_size = int(0.15 * total_size)
+    test_size = max(1, total_size - train_size - val_size)
+    train_size = total_size - val_size - test_size
+
+    if train_size + val_size + test_size > total_size:
+        val_size -= 1
+        if train_size + val_size + test_size > total_size:
+            train_size -= 1
+
+    print(f"Dataset sizes: Train={train_size}, Val={val_size}, Test={test_size}")
+    if train_size <= 0 or val_size <= 0 or test_size <= 0:
+        raise ValueError(
+            "Calculated split results in zero size for one or more datasets."
+        )
+
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
         dataset, [train_size, val_size, test_size]
     )
 
     return (
-        DataLoader(train_dataset, batch_size=batch_size, shuffle=True),
-        DataLoader(val_dataset, batch_size=batch_size, shuffle=True),
-        DataLoader(test_dataset, batch_size=batch_size, shuffle=True),
+        DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+        ),
+        DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True,
+        ),
+        DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True,
+        ),
+        dataset.state_shape,
+        dataset.action_shape,
     )
-
-
-def generate_games_batch(generate_game_func, num_games):
-    data = []
-    for _ in range(num_games):
-        data.extend(generate_game_func())
-    return data
-
-
-"""
-# Example usage:
-train_dataloader, val_dataloader, test_dataloader = get_chess_dataloader(
-    trajectory_length=10, 
-    engine_path="/home/linuxbrew/.linuxbrew/bin/stockfish"
-)
-print(len(train_dataloader.dataset))
-print(len(val_dataloader.dataset))
-print(len(test_dataloader.dataset))
-for batch in train_dataloader:
-    returns_to_go, states, actions, timesteps = batch['returns_to_go'], batch['states'], batch['actions'], batch['timesteps']
-    print(f"Returns-to-go shape: {returns_to_go.shape}")
-    print(f"States shape: {states.shape}")
-    print(f"Actions shape: {actions.shape}")
-    print(f"Timesteps shape: {timesteps.shape}")
-    
-    # Separate the data as requested
-    first_trajectory = {
-        'returns_to_go': returns_to_go[:, :10],
-        'states': states[:, :10],
-        'actions': actions[:, :10],
-        'timesteps': timesteps[:, :10]
-    }
-    
-    second_trajectory = {
-        'returns_to_go': returns_to_go[:, 1:],
-        'states': states[:, 1:],
-        'actions': actions[:, 1:],
-        'timesteps': timesteps[:, 1:]
-    }
-    
-    print("First trajectory (steps 0-9):")
-    print(f"Returns-to-go shape: {first_trajectory['returns_to_go'].shape}")
-    print(f"States shape: {first_trajectory['states'].shape}")
-    print(f"Actions shape: {first_trajectory['actions'].shape}")
-    print(f"Timesteps shape: {first_trajectory['timesteps'].shape}")
-    
-    print("\nSecond trajectory (steps 1-10):")
-    print(f"Returns-to-go shape: {second_trajectory['returns_to_go'].shape}")
-    print(f"States shape: {second_trajectory['states'].shape}")
-    print(f"Actions shape: {second_trajectory['actions'].shape}")
-    print(f"Timesteps shape: {second_trajectory['timesteps'].shape}")
-    
-    break  # Just print the first batch
-"""

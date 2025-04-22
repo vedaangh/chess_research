@@ -2,6 +2,8 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
+import chess
 
 
 # Multi-Head Attention mechanism
@@ -74,7 +76,7 @@ class TransformerBlock(nn.Module):
         return x
 
 
-# Updated Encoders class (now including decoders)
+# Updated EncodersDecoders class (now including decoders)
 class EncodersDecoders(nn.Module):
     def __init__(self, n_embed, state_shape, action_shape):
         super(EncodersDecoders, self).__init__()
@@ -156,11 +158,12 @@ class Transformer(nn.Module):
         num_layers,
         d_ff,
         n_embed,
-        state_shape=(14, 8, 8),
-        action_shape=(73, 8, 8),
+        state_shape,
+        action_shape,
+        max_seq_length,
+        max_timesteps=200,
         dropout=0.1,
         device="cuda",
-        dataset=None,
     ):
         super(Transformer, self).__init__()
         self.device = device
@@ -175,9 +178,11 @@ class Transformer(nn.Module):
         self.n_embed = n_embed
         self.state_shape = state_shape
         self.action_shape = action_shape
+        self.max_seq_length = max_seq_length
 
         # Use the updated EncodersDecoders class
         self.encoders_decoders = EncodersDecoders(n_embed, state_shape, action_shape)
+        self.encoders_decoders.timesteps_encoder = nn.Embedding(max_timesteps, n_embed)
 
         # Input projection
         self.input_projection = nn.Linear(n_embed, d_model)
@@ -185,137 +190,187 @@ class Transformer(nn.Module):
         # Reward projection
         self.reward_projection = nn.Linear(d_model, 1)
 
-    def forward(self, states, rtgs, timesteps, actions=None, mask=None):
+        # Positional embedding
+        self.pos_embed = nn.Parameter(torch.zeros(1, max_seq_length * 3, d_model))
+
+    def forward(self, states, actions, rtgs, timesteps, mask=None):
         batch_size, seq_length = states.shape[:2]
 
-        states_embeddings = self.encoders_decoders.state_encoder(
-            states.reshape(batch_size * seq_length, *states.shape[2:])
-        ).reshape(batch_size, seq_length, -1)
+        # Ensure inputs are on the correct device
+        states = states.to(self.device)
+        actions = actions.to(self.device)
+        rtgs = rtgs.to(self.device)
+        timesteps = timesteps.to(self.device).long()
 
-        rtg_embeddings = self.encoders_decoders.rtg_encoder(
-            rtgs.unsqueeze(-1).reshape(batch_size * seq_length, *rtgs.shape[2:])
-        ).reshape(batch_size, seq_length, -1)
+        # --- Encode inputs ---
+        # Reshape for encoders: (B, L, ...) -> (B*L, ...)
+        state_embeddings = self.encoders_decoders.state_encoder(
+            states.reshape(-1, *self.state_shape)
+        )
+        action_embeddings = self.encoders_decoders.action_encoder(
+            actions.reshape(-1, *self.action_shape)
+        )
+        rtg_embeddings = self.encoders_decoders.rtg_encoder(rtgs.reshape(-1, 1))
+        # Clamp timesteps before embedding
+        timesteps = torch.clamp(
+            timesteps, 0, self.encoders_decoders.timesteps_encoder.num_embeddings - 1
+        )
+        time_embeddings = self.encoders_decoders.timesteps_encoder(
+            timesteps.reshape(-1)
+        )
 
-        timesteps_embeddings = self.encoders_decoders.timesteps_encoder(
-            timesteps.float()
-            .unsqueeze(-1)
-            .reshape(batch_size * seq_length, *timesteps.shape[2:])
-        ).reshape(batch_size, seq_length, -1)
+        # Reshape back to (B, L, n_embed) or (B, L-1, n_embed)
+        state_embeddings = state_embeddings.reshape(
+            batch_size, seq_length, self.n_embed
+        )
+        # Note: actions has length L-1
+        action_embeddings = action_embeddings.reshape(
+            batch_size, seq_length - 1, self.n_embed
+        )
+        rtg_embeddings = rtg_embeddings.reshape(batch_size, seq_length, self.n_embed)
+        time_embeddings = time_embeddings.reshape(batch_size, seq_length, self.n_embed)
 
-        if actions is not None:
-            actions_embeddings = self.encoders_decoders.action_encoder(
-                actions.reshape(-1, *actions.shape[2:])
-            ).reshape(batch_size, seq_length - 1, -1)
-            # Combine embeddings with actions
-            combined_embeddings = torch.zeros(
-                batch_size, seq_length * 3 - 1, self.n_embed, device=self.device
-            )
-            combined_embeddings[:, 0::3, :] = rtg_embeddings + timesteps_embeddings
-            combined_embeddings[:, 1::3, :] = states_embeddings + timesteps_embeddings
-            combined_embeddings[:, 2::3, :] = (
-                actions_embeddings + timesteps_embeddings[:, :-1]
-            )
-        else:
-            # Combine embeddings without actions
-            combined_embeddings = torch.zeros(
-                batch_size, seq_length * 2, self.n_embed, device=self.device
-            )
-            combined_embeddings[:, 0::2, :] = rtg_embeddings + timesteps_embeddings
-            combined_embeddings[:, 1::2, :] = states_embeddings + timesteps_embeddings
-        x = self.input_projection(combined_embeddings)
+        # --- Create interleaved input sequence for Transformer ---
+        # Sequence: (R_0, S_0, A_0, R_1, S_1, A_1, ..., R_{L-1}, S_{L-1})
+        # Length: 3 * (L-1) + 2 = 3L - 1
+
+        token_embeddings = torch.zeros(
+            (batch_size, seq_length * 3 - 1, self.n_embed),
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+        # Embeddings for R_t, S_t, A_t
+        token_embeddings[:, 0::3, :] = rtg_embeddings + time_embeddings
+        token_embeddings[:, 1::3, :] = state_embeddings + time_embeddings
+        # Actions have length L-1, time embeddings for actions use t=0..L-2
+        token_embeddings[:, 2::3, :] = action_embeddings + time_embeddings[:, :-1, :]
+
+        # Project to d_model
+        x = self.input_projection(token_embeddings)
+
+        # Add positional embeddings
+        # Ensure pos_embed matches the sequence length
+        seq_len_actual = x.shape[1]
+        x = x + self.pos_embed[:, :seq_len_actual, :]
+
         x = self.dropout(x)
 
         # Apply transformer blocks
         for transformer_block in self.transformer_blocks:
             x = transformer_block(x, mask)
 
-        # Directly separate x into state, action, and reward
-        if actions is not None:
-            # For training (when actions are provided)
-            x_state = x[:, ::3]  # Every 3rd element starting from index 0 (states)
-            x_action = x[:, 1::3]  # Every 3rd element starting from index 1 (actions)
-            x_reward = x[:, 2::3]  # Every 3rd element starting from index 2 (rewards)
+        # --- Decode outputs ---
+        # We want to predict A_t, S_{t+1}, R_{t+1} based on the sequence up to time t.
+        # Predict A_t from output token corresponding to S_t input: x[:, 1::3, :]
+        # Predict S_{t+1} from output token corresponding to A_t input: x[:, 2::3, :]
+        # Predict R_{t+1} from output token corresponding to A_t input: x[:, 2::3, :]
 
-            # Apply decoders
-            action_preds = self.encoders_decoders.action_decoder(
-                x_action.reshape(-1, self.d_model)
-            ).view(batch_size, -1, *self.action_shape)
-            state_preds = self.encoders_decoders.state_decoder(
-                x_state.reshape(-1, self.d_model)
-            ).view(batch_size, -1, *self.state_shape)
-            reward_preds = self.reward_projection(x_reward)
+        # Output tokens corresponding to S_t inputs (predict A_t)
+        # Shape: (B, L, d_model)
+        action_pred_tokens = x[:, 1::3, :]
 
-            return action_preds, state_preds, reward_preds
-        else:
-            # For inference (when actions are not provided)
-            x_state = x[:, ::2]  # Every 2nd element starting from index 0 (states)
-            x_action = x[:, 1::2]  # Every 2nd element starting from index 1 (actions)
+        # Output tokens corresponding to A_t inputs (predict S_{t+1} and R_{t+1})
+        # Shape: (B, L-1, d_model)
+        state_reward_pred_tokens = x[:, 2::3, :]
 
-            # Apply decoders
-            state_preds = self.encoders_decoders.state_decoder(
-                x_state.reshape(-1, self.d_model)
-            ).view(batch_size, -1, *self.state_shape)
-            action_preds = self.encoders_decoders.action_decoder(
-                x_action.reshape(-1, self.d_model)
-            ).view(batch_size, -1, *self.action_shape)
+        # Decode Action Predictions (A_t)
+        # Input shape: (B*L, d_model)
+        # Output shape: (B, L, C_a, H, W)
+        action_preds = self.encoders_decoders.action_decoder(
+            action_pred_tokens.reshape(-1, self.d_model)
+        ).reshape(batch_size, seq_length, *self.action_shape)
 
-            return action_preds, state_preds, None
+        # Decode State Predictions (S_{t+1})
+        # Input shape: (B*(L-1), d_model)
+        # Output shape: (B, L-1, C_s, H, W)
+        state_preds = self.encoders_decoders.state_decoder(
+            state_reward_pred_tokens.reshape(-1, self.d_model)
+        ).reshape(batch_size, seq_length - 1, *self.state_shape)
 
-    def predict_move(self, board, rtg, timestep, context_window=10):
+        # Decode Reward Predictions (R_{t+1})
+        # Input shape: (B*(L-1), d_model)
+        # Output shape: (B, L-1, 1)
+        reward_preds = self.reward_projection(state_reward_pred_tokens)
+
+        # Return predictions
+        # We need to predict action A_t for t=0..L-1 (L predictions)
+        # We need to predict state S_{t+1} for t=0..L-2 (L-1 predictions)
+        # We need to predict reward R_{t+1} for t=0..L-2 (L-1 predictions)
+        return action_preds, state_preds, reward_preds
+
+    def predict_move(
+        self, board, rtg, timestep, encode_board_fn, decode_action_fn, context_window=10
+    ):
         self.eval()
+        if not self.training:
+            self.eval()
+
         with torch.no_grad():
-            # Initialize dataset if it doesn't exist
-            if not hasattr(self, "dataset"):
-                from dataloader import ChessDataset
-
-                self.dataset = ChessDataset(
-                    num_games=1,
-                    max_moves=100,
-                    trajectory_length=10,
-                    engine_path="/home/linuxbrew/.linuxbrew/bin/stockfish",
-                )
-
-            # Create a copy of the board for context collection
+            # --- Prepare context ---
             board_copy = board.copy()
-
-            # Get the last context_window moves from the move stack
             move_stack = list(board.move_stack)
-            context_moves = move_stack[-context_window:] if len(move_stack) > 0 else []
+            context_moves = (
+                move_stack[-(context_window - 1) :] if len(move_stack) > 0 else []
+            )
+            context_len = len(context_moves)
+            seq_len = context_len + 1
 
-            # Create tensors
+            # --- Create tensors ---
+            # We need L states, L-1 actions, L RTGs, L timesteps
             states = torch.zeros(
-                (1, context_window + 1, *self.state_shape), device=self.device
+                (1, seq_len, *self.state_shape), device=self.device, dtype=torch.float32
             )
             actions = torch.zeros(
-                (1, context_window, *self.action_shape), device=self.device
+                (1, seq_len - 1, *self.action_shape),
+                device=self.device,
+                dtype=torch.float32,
             )
-            rtgs = torch.full((1, context_window + 1, 1), rtg, device=self.device)
+            rtgs = torch.full(
+                (1, seq_len, 1), rtg, device=self.device, dtype=torch.float32
+            )
             timesteps = torch.arange(
-                timestep - context_window, timestep + 1, device=self.device
+                max(0, timestep - context_len), timestep + 1, device=self.device
             )
-            timesteps = timesteps.unsqueeze(0).unsqueeze(-1)
+            timesteps = timesteps.unsqueeze(0)
 
-            # Encode the current board state
-            current_state = self.dataset.encode_board(board)
-            states[0, -1] = torch.tensor(current_state, device=self.device)
+            # Encode the current board state (S_L)
+            states[0, -1] = torch.tensor(encode_board_fn(board), device=self.device)
 
-            # Fill in the context states and actions
-            for i, move in enumerate(reversed(context_moves)):
-                board_copy.pop()
-                states[0, -(i + 2)] = torch.tensor(
-                    self.dataset.encode_board(board_copy), device=self.device
+            # Fill in the context states and actions (backward from S_{L-1}, A_{L-1})
+            current_board_for_encoding = board.copy()
+            for i in range(context_len):
+                move_index = -(i + 1)
+                move = context_moves[move_index]
+
+                # Pop the move to get the board state *before* the move
+                current_board_for_encoding.pop()
+
+                # Encode the state S_{L-1-i}
+                states[0, move_index - 1] = torch.tensor(
+                    encode_board_fn(current_board_for_encoding), device=self.device
                 )
-                actions[0, -(i + 1)] = torch.tensor(
-                    self.dataset.encode_move(move, board_copy), device=self.device
+                # Encode the action A_{L-1-i} (taken from the state encoded above)
+                actions[0, move_index] = torch.tensor(
+                    self.dataset.encode_move(move, current_board_for_encoding),
+                    device=self.device,
                 )
 
-            # Get model prediction
-            action_preds, _, _ = self(
+            # Generate causal mask for the sequence length (3*L - 1)
+            mask = torch.tril(
+                torch.ones((seq_len * 3 - 1, seq_len * 3 - 1), device=self.device)
+            ).unsqueeze(0)
+
+            # --- Get model prediction ---
+            action_preds, _, _ = self.forward(
                 states=states,
                 actions=actions,
                 rtgs=rtgs,
                 timesteps=timesteps,
+                mask=mask,
             )
 
-            # Decode the predicted action using the original board state
-            return self.dataset.decode_action(action_preds[0, -1], board)
+            # --- Decode the predicted action ---
+            last_action_pred_planes = action_preds[0, -1]
+
+            return decode_action_fn(last_action_pred_planes, board)
