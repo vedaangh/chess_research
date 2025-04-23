@@ -8,6 +8,7 @@ csv_iter = pd.read_csv("data/lichess_db_standard_rated_2019-12.csv",
 
 # Grab the first chunk and show its head
 first_chunk = next(csv_iter)
-print(first_chunk.head())
+print("First few rows:")
+print(first_chunk.head()["white_active"])
 print(first_chunk.columns)
 print()
