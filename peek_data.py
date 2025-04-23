@@ -10,3 +10,4 @@ csv_iter = pd.read_csv("data/lichess_db_standard_rated_2019-12.csv",
 first_chunk = next(csv_iter)
 print(first_chunk.head())
 print(first_chunk.columns)
+print()

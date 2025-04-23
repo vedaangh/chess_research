@@ -1,0 +1,7 @@
+# requirements.txt
+
+datasets==2.21.0
+inquirerpy==0.3.4
+pfzy==0.3.4
+prompt-toolkit==3.0.47
+wcwidth==0.2.13 
